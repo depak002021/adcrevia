@@ -1,0 +1,27 @@
+# Keep the build context small and, above all, free of secrets. Anything listed here is
+# never sent to the Docker daemon, so it cannot end up in an image layer.
+
+.git
+.gitignore
+.vscode
+.superpowers
+node_modules
+.next
+dist
+coverage
+playwright-report
+test-results
+*.tsbuildinfo
+
+# Secrets and local configuration. Production values are passed at run time.
+.env
+.env.*
+!.env.example
+
+# Local working data and generated media.
+work
+outputs
+public/generated
+
+# Transfer archives and other local scratch.
+*.tgz

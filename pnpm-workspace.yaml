@@ -1,0 +1,13 @@
+allowBuilds:
+  '@prisma/engines': true
+  esbuild: true
+  prisma: true
+  # Next.js uses sharp for image optimisation when self-hosting. It needs its
+  # install script to resolve the correct prebuilt native binary for the
+  # platform, which matters because we build a Linux image from a Windows host.
+  sharp: true
+  '@node-rs/argon2': true
+  # Not needed: src/lib/video/ffmpeg.ts runs the system ffmpeg (FFMPEG_PATH or
+  # PATH), which the runtime image installs from Debian. Skipping the script
+  # avoids downloading an unused binary on every image build.
+  ffmpeg-static: false

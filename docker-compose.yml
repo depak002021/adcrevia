@@ -1,0 +1,99 @@
+# Adcrevia on a single VPS.
+#
+#   db       PostgreSQL 16, data on a named volume. Not published to the host.
+#   migrate  one-shot: applies pending Prisma migrations, then exits. The app and the
+#            worker only start once it has exited successfully.
+#   app      the Next.js server, published on 127.0.0.1 only. nginx on the host
+#            terminates TLS and proxies to it (deploy/nginx/adcrevia.conf).
+#   worker   the background job runner (agent steps, image jobs, ffmpeg composition).
+#
+# All configuration comes from .env.production (see deploy/env.production.example).
+# Use deploy/deploy.sh rather than calling compose by hand: it passes the commit SHA and
+# the public site URL to the build.
+
+name: adcrevia
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env.production
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      target: build
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://adcrevia.com}
+        APP_REVISION: ${APP_REVISION:-}
+    image: adcrevia-build:latest
+    env_file: .env.production
+    command: ["pnpm", "db:migrate:deploy"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runtime
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:-https://adcrevia.com}
+        APP_REVISION: ${APP_REVISION:-}
+    image: adcrevia-app:latest
+    restart: unless-stopped
+    init: true
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+    ports:
+      # Loopback only. The public entry point is nginx on the host.
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    volumes:
+      - media:/app/public/generated
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # 200 only when the database answers AND every required production key is set,
+      # so an unhealthy status here usually means a missing key in .env.production.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  worker:
+    image: adcrevia-app:latest
+    # Built by the `app` service; never pulled from a registry.
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+    command: ["node", "dist/worker.mjs"]
+    volumes:
+      - media:/app/public/generated
+    # The worker stops claiming on SIGTERM and lets in-flight jobs finish; anything still
+    # running when this expires keeps an expiring lease and is reclaimed on restart.
+    stop_grace_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  db-data:
+  media:

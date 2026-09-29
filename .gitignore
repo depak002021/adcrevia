@@ -1,0 +1,15 @@
+node_modules/
+.next/
+# Bundled worker output, produced by scripts/build-worker.mjs during the image build.
+dist/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+work/
+outputs/
+src/generated/prisma/
+public/generated/
+*.tsbuildinfo

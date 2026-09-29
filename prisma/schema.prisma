@@ -1,0 +1,904 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  SUPER_ADMIN
+}
+
+enum ProjectStatus {
+  DRAFT
+  GENERATING
+  IMAGES_READY
+  VIDEO_GENERATING
+  COMPLETED
+  FAILED
+}
+
+enum ImageStatus {
+  PENDING
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
+enum VideoStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ProviderKind {
+  IMAGE
+  VIDEO
+  TEXT
+  EMAIL
+  STORAGE
+}
+
+enum LogStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  name                String?
+  email               String               @unique
+  emailVerified       DateTime?
+  image               String?
+  passwordHash        String?
+  authVersion         Int                  @default(0)
+  role                Role                 @default(USER)
+  active              Boolean              @default(true)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  accounts            Account[]
+  sessions            Session[]
+  passwordResetTokens PasswordResetToken[]
+  projects            Project[]
+  promptTemplates     PromptTemplate[]
+
+  @@index([role, active])
+  @@index([createdAt])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expires])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@index([expires])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+model Project {
+  id               String               @id @default(cuid())
+  userId           String
+  name             String
+  status           ProjectStatus        @default(DRAFT)
+  selectedImageId  String?
+  targetImageCount Int                  @default(4)
+  /// Frame shape for generated images ("9:16", "4:5", "1:1", "16:9", "3:2"); null = legacy 3:2.
+  imageFormat      String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prompt           Prompt?
+  websiteReference WebsiteReference?
+  brandPalette     BrandPalette?
+  directions       CreativeDirection[]
+  images           GeneratedImage[]     @relation("ProjectImages")
+  selectedImage    GeneratedImage?      @relation("SelectedProjectImage", fields: [selectedImageId], references: [id], onDelete: SetNull)
+  imageSelections  ImageSelection[]
+  videos           GeneratedVideo[]
+  imageLogs        ImageGenerationLog[]
+  videoLogs        VideoGenerationLog[]
+  jobs             Job[]
+  conversation     Conversation?
+  compositions     VideoComposition[]
+  decisions        Decision[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([selectedImageId])
+}
+
+model Prompt {
+  id          String   @id @default(cuid())
+  projectId   String   @unique
+  original    String   @db.Text
+  enhanced    String?  @db.Text
+  productJson Json?
+  /// Social captions (Instagram, TikTok, YouTube, Facebook/Meta ads), written on request.
+  socialCopy  Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model WebsiteReference {
+  id            String    @id @default(cuid())
+  projectId     String    @unique
+  url           String
+  title         String?
+  analysis      Json?
+  safeErrorCode String?
+  analyzedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  project       Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model BrandPalette {
+  id        String   @id @default(cuid())
+  projectId String   @unique
+  colors    Json
+  derived   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model CreativeDirection {
+  id             String          @id @default(cuid())
+  projectId      String
+  position       Int
+  title          String
+  description    String          @db.Text
+  environment    String          @db.Text
+  lighting       String          @db.Text
+  composition    String          @db.Text
+  camera         String          @db.Text
+  mood           String          @db.Text
+  colorTreatment String          @db.Text
+  imagePrompt    String          @db.Text
+  createdAt      DateTime        @default(now())
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  image          GeneratedImage?
+
+  @@unique([projectId, position])
+  @@index([projectId, createdAt])
+}
+
+model GeneratedImage {
+  id                String               @id @default(cuid())
+  projectId         String
+  directionId       String               @unique
+  position          Int
+  status            ImageStatus          @default(PENDING)
+  provider          String?
+  model             String?
+  providerAssetId   String?              @unique
+  storageKey        String?
+  url               String?
+  mimeType          String?
+  width             Int?
+  height            Int?
+  checksum          String?
+  attempts          Int                  @default(0)
+  idempotencyKey    String               @unique
+  leaseExpiresAt    DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  safeErrorCode     String?
+  technicalLogRef   String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  project           Project              @relation("ProjectImages", fields: [projectId], references: [id], onDelete: Cascade)
+  selectedByProject Project[]            @relation("SelectedProjectImage")
+  direction         CreativeDirection    @relation(fields: [directionId], references: [id], onDelete: Cascade)
+  evaluation        ImageEvaluation?
+  selections        ImageSelection[]
+  videos            GeneratedVideo[]
+  videoSources      GeneratedVideoSource[]
+  logs              ImageGenerationLog[]
+
+  @@unique([projectId, position])
+  @@index([projectId, status])
+  @@index([status, createdAt])
+  @@index([leaseExpiresAt])
+}
+
+model ImageEvaluation {
+  id                    String         @id @default(cuid())
+  imageId               String         @unique
+  score                 Float
+  promptAlignment       Float?
+  productConsistency    Float?
+  brandAlignment        Float?
+  composition           Float?
+  visualQuality         Float?
+  commercialSuitability Float?
+  strengths             Json
+  reasoning             String         @db.Text
+  /// The advisory "pick this one" flag. Previously computed in memory on every
+  /// request and recomputed client-side, so the recommendation could differ
+  /// between the server response and the rendered grid, and nothing recorded
+  /// which frame was actually recommended at the time.
+  recommended           Boolean        @default(false)
+  createdAt             DateTime       @default(now())
+  image                 GeneratedImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@index([recommended])
+}
+
+model ImageSelection {
+  id         String         @id @default(cuid())
+  projectId  String
+  imageId    String
+  position   Int
+  selectedAt DateTime       @default(now())
+  project    Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  image      GeneratedImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, imageId])
+  @@unique([projectId, position])
+  @@index([selectedAt])
+}
+
+model GeneratedVideo {
+  id              String               @id @default(cuid())
+  projectId       String
+  sourceImageId   String
+  status          VideoStatus          @default(PENDING)
+  provider        String?
+  model           String?
+  providerTaskId  String?              @unique
+  motionStyle     String
+  instructions    String               @db.Text
+  durationSeconds Int
+  aspectRatio     String
+  storageKey      String?
+  url             String?
+  mimeType        String?
+  checksum        String?
+  attempts        Int                  @default(0)
+  idempotencyKey  String               @unique
+  startedAt       DateTime?
+  completedAt     DateTime?
+  safeErrorCode   String?
+  technicalLogRef String?
+  providerTaskMetadata Json?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  project         Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sourceImage     GeneratedImage       @relation(fields: [sourceImageId], references: [id], onDelete: Restrict)
+  sources         GeneratedVideoSource[]
+  logs            VideoGenerationLog[]
+  compositionClips CompositionClip[]
+
+  @@index([projectId, status])
+  @@index([sourceImageId])
+  @@index([status, createdAt])
+}
+
+model GeneratedVideoSource {
+  id       String         @id @default(cuid())
+  videoId  String
+  imageId  String
+  position Int
+  video    GeneratedVideo @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  image    GeneratedImage @relation(fields: [imageId], references: [id], onDelete: Restrict)
+
+  @@unique([videoId, imageId])
+  @@unique([videoId, position])
+  @@index([imageId])
+}
+
+model ImageGenerationLog {
+  id            String          @id @default(cuid())
+  projectId     String
+  imageId       String?
+  status        LogStatus
+  provider      String
+  model         String?
+  durationMs    Int?
+  safeErrorCode String?
+  correlationId String          @unique
+  details       Json?
+  createdAt     DateTime        @default(now())
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  image         GeneratedImage? @relation(fields: [imageId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([imageId, createdAt])
+  @@index([status, createdAt])
+  @@index([provider, createdAt])
+}
+
+model VideoGenerationLog {
+  id             String          @id @default(cuid())
+  projectId      String
+  videoId        String?
+  status         LogStatus
+  provider       String
+  model          String?
+  providerTaskId String?
+  durationMs     Int?
+  safeErrorCode  String?
+  correlationId  String          @unique
+  details        Json?
+  createdAt      DateTime        @default(now())
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  video          GeneratedVideo? @relation(fields: [videoId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([videoId, createdAt])
+  @@index([providerTaskId])
+  @@index([status, createdAt])
+  @@index([provider, createdAt])
+}
+
+model AIProvider {
+  id             String             @id @default(cuid())
+  slug           String             @unique
+  name           String
+  kind           ProviderKind
+  enabled        Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  configurations APIConfiguration[]
+
+  @@index([kind, enabled])
+}
+
+model APIConfiguration {
+  id                  String     @id @default(cuid())
+  providerId          String
+  name                String
+  model               String?
+  endpoint            String?
+  encryptedCredential Json?
+  /// Non-secret provider configuration that still belongs with the credential:
+  /// bucket name and public base URL for storage, default resolution for an
+  /// image provider, and so on. Kept separate from `encryptedCredential` so it
+  /// can be read and shown in the admin console without decryption.
+  settings            Json?
+  enabled             Boolean    @default(false)
+  lastTestedAt        DateTime?
+  lastTestSucceeded   Boolean?
+  safeTestMessage     String?
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  provider            AIProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, enabled])
+  @@index([createdAt])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RateLimitBucket {
+  id          String   @id @default(cuid())
+  keyHash     String
+  action      String
+  windowStart DateTime
+  count       Int      @default(1)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([keyHash, action, windowStart])
+  @@index([expiresAt])
+}
+
+// ============================================================================
+// Durable work queue
+//
+// Every expensive step used to run inside an HTTP request, driven forward by a
+// `for` loop in the browser: close the tab and the run stopped, and a provider
+// task whose polling was abandoned was never reconciled. Work is now a row, so
+// it survives a lost client, a restart and a deploy.
+//
+// Postgres is the queue. At this volume a dedicated broker would be more moving
+// parts than it removes; claiming with `FOR UPDATE SKIP LOCKED` gives exactly
+// the semantics needed and keeps the job history queryable alongside the domain
+// data it refers to.
+// ============================================================================
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  /// Terminal, set by a human or by a superseding job. Never retried.
+  CANCELLED
+}
+
+enum JobKind {
+  IMAGE_GENERATE
+  IMAGE_EVALUATE
+  VIDEO_SUBMIT
+  VIDEO_POLL
+  VIDEO_COMPOSE
+  VIDEO_EXPORT
+  WEBSITE_SCRAPE
+  AGENT_STEP
+}
+
+model Job {
+  id     String    @id @default(cuid())
+  kind   JobKind
+  status JobStatus @default(QUEUED)
+
+  /// Deterministic identity for a unit of work, so enqueueing the same thing
+  /// twice is a no-op rather than a duplicate render. Nullable because some
+  /// jobs are genuinely repeatable; Postgres permits many NULLs in a unique
+  /// index, so this works as "unique when present".
+  dedupeKey String? @unique
+
+  payload Json
+
+  /// 0-100, written by the worker and read by the project event stream. This is
+  /// what replaces the timer-driven progress the UI used to invent.
+  progress      Int     @default(0)
+  progressLabel String?
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+
+  /// Claimable once this has passed. Retries set it forward for backoff.
+  runAfter DateTime @default(now())
+
+  /// Lease held by the worker executing this row. An expired lease means the
+  /// worker died and the job may be reclaimed.
+  leaseExpiresAt DateTime?
+  lockedBy       String?
+
+  /// Lower runs first within the same `runAfter`. Interactive work (an agent
+  /// step the user is waiting on) outranks batch work (a composition render).
+  priority Int @default(100)
+
+  safeErrorCode String?
+  /// Operator-facing detail. Sanitised before it is written — never a provider
+  /// response body and never a credential.
+  lastError String? @db.Text
+
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// The claim query orders by exactly this, so it can be served from the index.
+  @@index([status, runAfter, priority])
+  @@index([projectId, createdAt])
+  @@index([leaseExpiresAt])
+  @@index([kind, status])
+}
+
+// ============================================================================
+// Agentic brief
+//
+// The AI surface was four stateless one-shot calls with nowhere to store a turn,
+// so the product could not ask a follow-up question, could not remember an
+// answer, and could not show its working. These tables give the brief a
+// conversation, an audit trail of the fast decisions that steered it, and
+// per-run token and latency accounting.
+// ============================================================================
+
+enum MessageRole {
+  SYSTEM
+  USER
+  ASSISTANT
+  /// Result of a tool the assistant invoked.
+  TOOL
+}
+
+enum ConversationPhase {
+  /// Still gathering what the product is and who it is for.
+  DISCOVERY
+  /// A candidate product was found; waiting for the user to confirm it.
+  PRODUCT_CONFIRM
+  /// Proposing and refining creative directions.
+  DIRECTION
+  /// Enough is known to generate. The gate the classifier opens.
+  READY
+}
+
+model Conversation {
+  id        String            @id @default(cuid())
+  projectId String            @unique
+  phase     ConversationPhase @default(DISCOVERY)
+
+  /// 0-100, from the completeness classifier. Drives the brief meter in the UI
+  /// and gates generation, replacing a fixed-length form as the definition of
+  /// "ready".
+  completeness Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project  Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages Message[]
+  runs     AgentRun[]
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+
+  /// Visible text. Empty string on a turn that only carries tool calls.
+  content String @db.Text
+
+  /// Tool calls the assistant requested on this turn.
+  toolCalls Json?
+  /// Populated when `role` is TOOL.
+  toolName   String?
+  toolResult Json?
+
+  /// Explicit ordering. `createdAt` alone is not enough: a tool result and the
+  /// turn that consumed it can land inside the same millisecond.
+  position Int
+
+  createdAt    DateTime     @default(now())
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, position])
+  @@index([conversationId, createdAt])
+}
+
+model AgentRun {
+  id             String    @id @default(cuid())
+  conversationId String
+  status         JobStatus @default(QUEUED)
+  model          String?
+
+  /// Which prompt version produced this run. Without it an output cannot be
+  /// reproduced after an administrator edits a template.
+  promptTemplateId String?
+
+  steps            Int  @default(0)
+  promptTokens     Int?
+  completionTokens Int?
+  latencyMs        Int?
+
+  safeErrorCode String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+
+  conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  promptTemplate PromptTemplate? @relation(fields: [promptTemplateId], references: [id], onDelete: SetNull)
+  decisions      Decision[]
+
+  @@index([conversationId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum DecisionKind {
+  /// Yes/no. Returns the probability the statement is true.
+  NOUL
+  /// One of a fixed set. Returns a probability per option.
+  CHOICE
+  /// Rating against ordered levels. Returns a continuous score.
+  SCORE
+}
+
+model Decision {
+  id         String  @id @default(cuid())
+  agentRunId String?
+  projectId  String?
+
+  /// Stable key, e.g. `brief_is_complete`, `scrape_matched_product`,
+  /// `image_on_brand`, `url_is_safe_to_fetch`.
+  key  String
+  kind DecisionKind
+
+  /// The question exactly as asked. Stored rather than referenced so an audit
+  /// still makes sense after the template that generated it changes.
+  instructions String @db.Text
+
+  /// Provider answer, shaped by `kind`: `{ noul }`, `{ choice, probabilities }`
+  /// or `{ score, distribution }`.
+  answer     Json
+  confidence Float?
+
+  /// Which decision backend answered. `openai` today; `typesafe` once a Jev key
+  /// is configured. Recorded per decision so a change of backend is visible in
+  /// the history rather than silently altering behaviour.
+  provider  String
+  model     String?
+  latencyMs Int?
+
+  createdAt DateTime @default(now())
+
+  agentRun AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  project  Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, key, createdAt])
+  @@index([agentRunId])
+  @@index([key, createdAt])
+}
+
+// ============================================================================
+// Video composition
+//
+// One GeneratedVideo is one provider render. There was no way to combine several
+// into a timeline: no entity, no route, no ffmpeg. A composition is the edit —
+// ordered clips, trims, transitions and an audio bed — and each CompositionRender
+// is one encoded output sized for a specific destination.
+// ============================================================================
+
+enum CompositionStatus {
+  DRAFT
+  QUEUED
+  RENDERING
+  COMPLETED
+  FAILED
+}
+
+enum ClipTransition {
+  /// Hard cut. Lets the renderer use the concat demuxer and stream-copy, which
+  /// is dramatically cheaper than re-encoding through a filter graph.
+  NONE
+  CROSSFADE
+  FADE_BLACK
+  DISSOLVE
+  WIPE_LEFT
+  WIPE_RIGHT
+}
+
+enum AudioTrackKind {
+  MUSIC
+  VOICEOVER
+}
+
+model VideoComposition {
+  id        String            @id @default(cuid())
+  projectId String
+  status    CompositionStatus @default(DRAFT)
+
+  /// Master geometry. Platform variants are derived from this rather than
+  /// re-edited, so the edit is decided once and encoded many times.
+  aspectRatio String @default("9:16")
+  width       Int    @default(1080)
+  height      Int    @default(1920)
+  fps         Int    @default(30)
+
+  /// Integrated loudness target in LUFS. -14 is the level the major social
+  /// platforms normalise to, so mastering to it avoids their own processing.
+  loudnessTarget Float @default(-14)
+
+  durationMs Int?
+
+  storageKey String?
+  url        String?
+  posterKey  String?
+  posterUrl  String?
+  checksum   String?
+
+  safeErrorCode String?
+  renderedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  project Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  clips   CompositionClip[]
+  renders CompositionRender[]
+  audio   AudioTrack[]
+
+  @@index([projectId, createdAt])
+  @@index([status, createdAt])
+}
+
+model CompositionClip {
+  id            String @id @default(cuid())
+  compositionId String
+  videoId       String
+  position      Int
+
+  /// Trim window into the source clip, in milliseconds.
+  trimInMs  Int  @default(0)
+  trimOutMs Int?
+
+  transition   ClipTransition @default(CROSSFADE)
+  transitionMs Int            @default(500)
+
+  /// Playback rate multiplier. 1 is untouched.
+  speed Float @default(1)
+
+  createdAt DateTime @default(now())
+
+  composition VideoComposition @relation(fields: [compositionId], references: [id], onDelete: Cascade)
+  /// Restrict, not Cascade: deleting a source render must not silently reshape
+  /// an edit the user has already approved.
+  video       GeneratedVideo   @relation(fields: [videoId], references: [id], onDelete: Restrict)
+
+  @@unique([compositionId, position])
+  @@unique([compositionId, videoId])
+  @@index([videoId])
+}
+
+/// One encoded output of a composition, sized for a destination.
+model CompositionRender {
+  id            String @id @default(cuid())
+  compositionId String
+
+  /// Destination key: `reels`, `shorts`, `tiktok`, `feed_square`,
+  /// `feed_portrait`, `youtube`. Several share geometry but are kept distinct so
+  /// per-platform encoding can diverge without a migration.
+  preset      String
+  aspectRatio String
+  width       Int
+  height      Int
+
+  status CompositionStatus @default(QUEUED)
+
+  storageKey String?
+  url        String?
+  posterKey  String?
+  posterUrl  String?
+  bytes      Int?
+  durationMs Int?
+
+  safeErrorCode String?
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  composition VideoComposition @relation(fields: [compositionId], references: [id], onDelete: Cascade)
+
+  @@unique([compositionId, preset])
+  @@index([status, createdAt])
+}
+
+model AudioTrack {
+  id            String         @id @default(cuid())
+  compositionId String
+  kind          AudioTrackKind
+
+  storageKey String
+  url        String
+
+  /// Gain applied before the mix. A music bed sits well below dialogue, so the
+  /// default is deliberately quiet.
+  gainDb Float @default(-18)
+
+  /// Duck under clip audio rather than competing with it.
+  duck    Boolean @default(true)
+  startMs Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  composition VideoComposition @relation(fields: [compositionId], references: [id], onDelete: Cascade)
+
+  @@index([compositionId])
+}
+
+// ============================================================================
+// Admin-configurable prompts
+//
+// Every instruction to a model was a string literal in the codebase, so tuning
+// tone or rubric meant a deploy, and no generation recorded which wording
+// produced it. Templates are versioned and immutable once written: editing
+// creates a new version, so a bad change is a rollback rather than a recovery.
+// ============================================================================
+
+model PromptTemplate {
+  id String @id @default(cuid())
+
+  /// Stable key, e.g. `agent.creative_director`, `directions.generate`,
+  /// `image.prompt`, `video.motion.CINEMATIC`, `evaluation.rubric`,
+  /// `classifier.brief_complete`.
+  key     String
+  version Int
+
+  label String
+  body  String @db.Text
+
+  /// Variable names the body is allowed to reference. Validated against the
+  /// body on save, so a template cannot be activated while referring to a
+  /// variable the caller never supplies.
+  variables Json
+
+  model       String?
+  temperature Float?
+
+  /// At most one version per key may be active. Enforced by a partial unique
+  /// index added in the migration, because Prisma cannot express one here.
+  active Boolean @default(false)
+
+  notes       String? @db.Text
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  createdBy User?      @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  agentRuns AgentRun[]
+
+  @@unique([key, version])
+  @@index([key, active])
+}
+
+// ============================================================================
+// Marketing waitlist
+//
+// The live landing page posted to a PHP script beside its static export. Moving
+// it into the application makes the signup a first-class record with the same
+// validation contract, so the rollout can be planned from real data.
+// ============================================================================
+
+model WaitlistSignup {
+  id           String  @id @default(cuid())
+  name         String
+  email        String  @unique
+  sells        String  @db.Text
+  businessType String
+  website      String?
+  source       String?
+
+  /// Set once the provider accepted the confirmation email, so a send can be
+  /// retried without double-mailing.
+  confirmationSentAt DateTime?
+  /// Which rollout batch the invitation went out in.
+  invitedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdAt])
+  @@index([businessType])
+  @@index([invitedAt])
+}
